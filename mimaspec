@@ -1,0 +1,106 @@
+                    MIMA - Monochome Image, Maybe Anything
+                      Specification Version 1, June 2022
+                             github.com/evv42/mima
+    This specification and the reference encoder/decoder are Public Domain.
+-------------------------------------------------------------------------------
+
+A MIMA file consists of a 16-byte header, followed by any number of data 
+encodings, and a 1-byte end marker.
+
+The header is as follows:
+
+ Size	| Name	| Description
+ 7	 	 magic	  string "MIMA_FF"
+ 1	 	 chan	  numbers of channels in the image
+ 5	 	 size	  uncompressed file size (width*height*chan, big-endian)
+ 3	 	 width	  image width in pixels (big-endian)
+
+The chan field can have one of the following values:
+0 - Not an image
+1 - Grayscale
+2 - Grayscale with alpha channel
+3 - RGB, 32bpp
+4 - RGBA, 32bpp
+Any other value is reserved for future use, and should be treated as invalid.
+The width field is only useful for images, and shall be set to 1 for files.
+
+Although this format can encode any image, or anything, it will produce optimal
+results only with grayscale images.
+
+Data is encoded from the first byte to the last. The encoder must encode the
+first byte as a MIMA_VALUE, so that it can be used as the previous byte. A file
+is complete when all bytes specified by size have been covered.
+
+Bytes are encoded as:
+- a run of the previous byte
+- an index into an array of previously seen bytes
+- a difference to the previous byte value
+- discrete values
+
+The channels are assumed to not be premultiplied with the alpha channel.
+
+A running array[4], initialized to {0,1,128,255}, of previously seen bytes
+values is maintained by the encoder and decoder. Each new byte value is put
+into this array at the position [byte_value%4].
+
+Each chunck starts with a 2-bit tag, followed by a number of data bits.
+The bit length of chunks is divisible by 8 (byte-aligned). All values encoded
+in these data bits have the most significant bit on the left.
+
+
+The possible chunks are:
+
+--MIMA_VALUE--------------------------------
+|      Byte[0]    | Byte[1] | .. | Byte[n] |
+| 7 6 5 4 3 2 1 0 | 7 .. 0  | .. | 7 .. 0  |
+|----|------------|---------|----|---------|
+| 0 0|     n      | 0th val | .. | n-1 val |
+--------------------------------------------
+
+2-bit tag b00
+6-bit number of encoded bytes: 0..63
+
+A MIMA_VALUE with n=0 indicates the end of the stream.
+
+
+--MIMA_DIFF--------
+|      Byte[0]    |
+| 7 6 5 4 3 2 1 0 |
+|----|------------|
+| 0 1| df  | ds   |
+-------------------
+
+2-bit tag b01
+3-bit difference from the previous byte: -4..3
+3-bit difference from the previous byte (df): -4..3
+
+The difference to the current channel values are using a wraparound operation, 
+so 1 - 2 will result in 255, while 255 + 1 will result in 0.
+Values are stored as unsigned integers with a bias of 4. E.g. -4 is stored as 
+0 (b000). 3 is stored as 7 (b111).
+
+
+--MIMA_INDEX-------
+|      Byte[0]    |
+| 7 6 5 4 3 2 1 0 |
+|----|------------|
+| 1 0|i1 |i2 |i3  |
+-------------------
+
+2-bit tag b01
+2-bit index into the index array: 0..3
+2-bit index into the index array: 0..3
+2-bit index into the index array: 0..3
+
+
+--MIMA_RUN---------
+|      Byte[0]    |
+| 7 6 5 4 3 2 1 0 |
+|----|------------|
+| 1 0|   length   |
+-------------------
+
+2-bit tag b01
+6-bit run-length repeating the previous pixel: 3..66
+
+The run-length is stored with a bias of -3.
